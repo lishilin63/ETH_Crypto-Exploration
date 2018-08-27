@@ -1,0 +1,80 @@
+---
+title: "ETH Exploration and Forecasting"
+author: "Shilin Li (sl4261)"
+date: "8/23/2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library('rugarch')
+library('forecast')
+```
+
+
+```{r}
+# ETH vs BTC
+dt.btc <- read.csv("BTC-USD.csv",header = T)
+dt.eth <- read.csv("ETH-USD.csv",header = T)
+dt.eos <- read.csv("EOS-USD.csv",header = T)
+
+eth_close_ts <- ts(dt.eth$Close,start = 2017, frequency = 365)
+eth_return_ts <- ts(log(dt.eth$Close/dt.eth$Open),start = 2017, frequency = 365)
+btc_close_ts <- ts(dt.btc$Close,start = 2017, frequency = 365)
+btc_return_ts <- ts(log(dt.btc$Close/dt.btc$Open),start = 2017, frequency = 365)
+eos_close_ts <- ts(dt.eos$Close,start = 2017, frequency = 365)
+
+plot(eth_close_ts,ylim = c(0,2000),ylab = "Daily Closing Price",col = "red")
+lines(btc_close_ts/10,lty=2)
+legend("topleft",legend = c("ETH","Bitcoin/10"),lty=c(1,2),col = c("red","black"))
+
+plot(eth_return_ts,ylim = c(-0.35,0.35),ylab = "Daily log-return",col = "red")
+lines(btc_return_ts,lty=2)
+legend("topleft",legend = c("ETH","Bitcoin"),lty=c(1,2),col = c("red","black"))
+
+plot(eth_return_ts^2,ylim = c(0,0.1),ylab = "Daily Squared log-return",col = "red")
+lines(btc_return_ts^2,lty=2)
+legend("topleft",legend = c("ETH","Bitcoin"),lty=c(1,2),col = c("red","black"))
+```
+ETH log return shows mean reverse characteristics with high volatility fluctuations. The squared log return shows ETH is even more volitile than bitcoin.
+
+###ACF / PACF
+```{r,warning=FALSE}
+acf(eth_return_ts)
+pacf(eth_return_ts,ylim = c(-0.1,1))
+eth_arma_auto = auto.arima(eth_return_ts,max.p = 5,max.q = 5, ic = "bic", trace = FALSE)
+eth_arma_auto
+acf(eth_arma_auto$residuals)
+acf(eth_arma_auto$residuals^2)
+```
+ACF and PACF of eth return does not show a significant pattern and it seems like a stationary time series. We use the auto.arima function to auto detect p and q based on lowest BIC criteria. The result shows an ARIMA(1,1,1) process.
+
+After we fit the ARIMA(1,1,1) to ETH return, we observe the ACF of residual-squared does not show randomness and goes beyond the confidence interval. Thus, we decided to use GARCH(1,1) model to fit the data.
+
+###GARCH Model Fit
+```{r}
+arma.garch.norm <- ugarchspec(mean.model = list(armaOrder = c(1,1)),variance.model = list(garchOrder = c(1,1)))
+eth.garch.norm = ugarchfit(data = eth_return_ts, spec = arma.garch.norm)
+show(eth.garch.norm)
+acf(residuals(eth.garch.norm,standardize = FALSE))
+```
+The summary of the eth garch fit gives ar1 0.729 with p-value 0.0039. This statistically significant result implies there is a small amount of autocorrelation. Both alpha and beta are statistically significant which shows persistent volatility clustering, meaning that today's eth return has significant effect to the variance many periods in the future.
+
+The output also includes tests applied to the standardized and squared standardized residuals. Weighted Ljung-Box test (ARCH LM test) statistics and their p-values all indicate that the estimated model and contiditional mean and variance are adequate for removing serial correlation from the series and squared series, respectively. The Goodness-of-Fit test compare the empirical distribution of the standardized residuals with the theoretical ones from the specified density, which is Gaussian by default. The small p-values strongly reject the null hypothesis that the white noise standardized innovation process {εt} is Gaussian. 
+
+
+###Forecasting
+```{r}
+eth_garch_forecast <- ugarchforecast(eth.garch.norm, n.ahead = 200)
+eth_return_forecast <- forecast(auto.arima(ts(eth_return_ts,frequency=365),D=1),h=200)
+U_limit <- eth_return_forecast$mean + eth_garch_forecast@forecast$sigmaFor
+L_limit <- eth_return_forecast$mean - eth_garch_forecast@forecast$sigmaFor
+plot(eth_return_forecast)
+lines(U_limit, type = "l", col = "red")
+lines(L_limit, type = "l", col = "red")
+
+```
+Forecast the next 200 days mean ETH returns. We used the forecast function on ARIMA(1,1,1) and the variance used was from GARCH(1,1) which accounts for the volitiltiy. We could observe there is still a large fluctuations on the ETH returns and this particular type of crypto currency has mean reverse property. In the long run, we beleive the unstable phonemenon will continue to appear.    
